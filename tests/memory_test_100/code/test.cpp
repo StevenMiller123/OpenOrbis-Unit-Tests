@@ -17,7 +17,7 @@ TEST_GROUP (MemoryTests) {
 };
 
 // These tests are at the top of the file so they run last.
-// These flexible tests will reserve the entire flexible budget on failure, which will mess up other tests.
+// These flexible tests will reserve the entire flexible budget on failure, which will mess up other tests on some emulators.
 TEST(MemoryTests, FlexibleTest) {
   // This test is to validate memory behaviors unique to flexible memory mappings.
   // Start by testing available flexible memory size.
