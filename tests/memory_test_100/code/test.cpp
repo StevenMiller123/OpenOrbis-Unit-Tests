@@ -17,7 +17,251 @@ TEST_GROUP (MemoryTests) {
 };
 
 // These tests are at the top of the file so they run last.
-// This is to prevent issues related to sceKernelEnableDmemAliasing, which afaik cannot be undone without direct syscall usage.
+// These flexible tests will reserve the entire flexible budget on failure, which will mess up other tests.
+TEST(MemoryTests, FlexibleTest) {
+  // This test is to validate memory behaviors unique to flexible memory mappings.
+  // Start by testing available flexible memory size.
+  std::list<uint64_t> addresses;
+  uint64_t            addr_out = 0;
+  int32_t             result   = 0;
+  while (result == 0) {
+    result = sceKernelMapFlexibleMemory(&addr_out, 0x4000, 3, 0);
+    if (result < 0) {
+      // Out of flex mem
+      UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
+    } else {
+      // Mapped flex mem successfully.
+      UNSIGNED_INT_EQUALS(0, result);
+      // Add the mapping address to addresses, need to unmap later to clean up.
+      addresses.emplace_back(addr_out);
+    }
+  }
+
+  // After all these mappings, available flex size should be 0.
+  uint64_t avail_flex_size = 0;
+  result                   = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(0, avail_flex_size);
+
+  // sceKernelMmap with MAP_ANON uses the flexible budget.
+  uint64_t test_addr;
+  result = sceKernelMmap(0, 0x4000, 3, 0x1000, -1, 0, &test_addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
+
+  // Test budget behavior with MAP_STACK
+  test_addr = 0xfb00000000;
+  result    = sceKernelMmap(test_addr, 0x4000, 3, 0x400, -1, 0, &test_addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
+
+  // sceKernelMmap with MAP_VOID
+  result = sceKernelMmap(test_addr, 0x4000, 3, 0x100, -1, 0, &test_addr);
+  UNSIGNED_INT_EQUALS(0, result);
+  result = sceKernelMunmap(test_addr, 0x4000);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // sceKernelMmap with files also uses the flexible budget.
+  int32_t fd = sceKernelOpen("/app0/assets/misc/test_file.txt", 0, 0666);
+  CHECK(fd > 0);
+  result = sceKernelMmap(0, 0x4000, 3, 0, fd, 0, &test_addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
+  result = sceKernelClose(fd);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // Make sure download dir file has enough space to mmap before trying.
+  fd = sceKernelOpen("/download0/test_file.txt", 0x602, 0666);
+  CHECK(fd > 0);
+  char test_buf[0x100000];
+  memset(test_buf, 0, sizeof(test_buf));
+  int64_t bytes = sceKernelWrite(fd, test_buf, sizeof(test_buf));
+  LONGS_EQUAL(sizeof(test_buf), bytes);
+
+  // mmap download dir file.
+  result = sceKernelMmap(0, 0x4000, 3, 0, fd, 0, &test_addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
+  result = sceKernelClose(fd);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // Files in system folders like /data don't count towards the budget.
+  fd = sceKernelOpen("/data/test_file.txt", 0x602, 0666);
+  CHECK(fd > 0);
+  memset(test_buf, 0, sizeof(test_buf));
+  bytes = sceKernelWrite(fd, test_buf, sizeof(test_buf));
+  LONGS_EQUAL(sizeof(test_buf), bytes);
+
+  // mmap data dir file.
+  result = sceKernelMmap(0, 0x4000, 3, 0, fd, 0, &test_addr);
+  UNSIGNED_INT_EQUALS(0, result);
+  result = sceKernelMunmap(test_addr, 0x4000);
+  UNSIGNED_INT_EQUALS(0, result);
+  result = sceKernelClose(fd);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // We can't directly correlate flex size to mapped memory,
+  // since my list of addresses will also cut into the flex mem budget.
+
+  // Unmap all of the flexible memory used here.
+  for (uint64_t addr: addresses) {
+    result = sceKernelMunmap(addr, 0x4000);
+    UNSIGNED_INT_EQUALS(0, result);
+  }
+  addresses.clear();
+
+  // Available flex size should be greater than 0 now
+  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  CHECK(avail_flex_size != 0);
+
+  // Flexible memory is not backed in any way, so the contents are garbage before initializing.
+  addr_out = 0x300000000;
+  result   = sceKernelMapFlexibleMemory(&addr_out, 0x10000, 3, 0);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // While we're here, make sure stored memory info matches expectations for flexible memory.
+  struct OrbisKernelVirtualQueryInfo {
+    uint64_t start;
+    uint64_t end;
+    int64_t  offset;
+    int32_t  prot;
+    int32_t  memory_type;
+    uint8_t  is_flexible  : 1;
+    uint8_t  is_direct    : 1;
+    uint8_t  is_stack     : 1;
+    uint8_t  is_pooled    : 1;
+    uint8_t  is_committed : 1;
+    char     name[32];
+  };
+
+  OrbisKernelVirtualQueryInfo info;
+  info   = {};
+  result = sceKernelVirtualQuery(addr_out, 0, &info, sizeof(info));
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(addr_out, info.start);
+  LONGS_EQUAL(addr_out + 0x10000, info.end);
+  LONGS_EQUAL(0, info.offset);
+  LONGS_EQUAL(3, info.prot);
+  LONGS_EQUAL(0, info.memory_type);
+  LONGS_EQUAL(1, info.is_flexible);
+  LONGS_EQUAL(0, info.is_direct);
+  LONGS_EQUAL(0, info.is_stack);
+  LONGS_EQUAL(0, info.is_pooled);
+  LONGS_EQUAL(1, info.is_committed);
+
+  // Write 1's to the full memory range.
+  memset(reinterpret_cast<void*>(addr_out), 1, 0x10000);
+
+  // Ensure the full range has 1's
+  memset(test_buf, 1, sizeof(test_buf));
+  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x10000);
+  LONGS_EQUAL(0, result);
+
+  // Unmap the middle of the range
+  result = sceKernelMunmap(addr_out + 0x4000, 0x8000);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // Ensure the remaining mapped areas are still filled with 1's
+  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x4000);
+  LONGS_EQUAL(0, result);
+  result = memcmp(&test_buf[0xc000], reinterpret_cast<void*>(addr_out + 0xc000), 0x4000);
+  LONGS_EQUAL(0, result);
+
+  // Remap the unmapped area, use flag fixed to ensure correct placement.
+  uint64_t new_addr = addr_out + 0x4000;
+  result            = sceKernelMapFlexibleMemory(&new_addr, 0x8000, 3, 0x10);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(addr_out + 0x4000, new_addr);
+
+  // The new memory area will not have the contents of the old memory.
+  result = memcmp(&test_buf[0x4000], reinterpret_cast<void*>(new_addr), 0x8000);
+  CHECK(result != 0);
+
+  // Re-fill the area with 1's
+  memset(reinterpret_cast<void*>(addr_out), 1, 0x10000);
+  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x10000);
+  LONGS_EQUAL(0, result);
+
+  // Overwrite the whole memory area, this should destroy the contents within.
+  new_addr = addr_out;
+  result   = sceKernelMapFlexibleMemory(&new_addr, 0x10000, 3, 0x10);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(new_addr, addr_out);
+
+  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x10000);
+  CHECK(result != 0);
+
+  result = sceKernelMunmap(new_addr, 0x10000);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // Get a base budget value to calculate with.
+  uint64_t avail_flex_size_before = 0;
+  result                          = sceKernelAvailableFlexibleMemorySize(&avail_flex_size_before);
+  UNSIGNED_INT_EQUALS(0, result);
+  CHECK(avail_flex_size_before != 0);
+
+  // Note: Seems like allocations are not directly consuming the budget.
+  // Using these larger sized mappings allows me to validate budget behavior, but I will need to test this issue.
+
+  // Test sceKernelMapFlexibleMemory to see how it impacts the budget.
+  result = sceKernelMapFlexibleMemory(&new_addr, 0x100000, 3, 0x0);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // This should reduce available size by 0x100000.
+  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(avail_flex_size_before - 0x100000, avail_flex_size);
+
+  // Unmap the memory
+  result = sceKernelMunmap(new_addr, 0x100000);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // This should bring available back to normal.
+  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(avail_flex_size_before, avail_flex_size);
+
+  // Test mmap with MAP_ANON to see how it impacts the budget.
+  result = sceKernelMmap(0, 0x100000, 3, 0x1000, -1, 0, &new_addr);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // This should reduce available size by 0x100000.
+  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(avail_flex_size_before - 0x100000, avail_flex_size);
+
+  // Unmap the memory
+  result = sceKernelMunmap(new_addr, 0x100000);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // This should bring available back to normal.
+  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(avail_flex_size_before, avail_flex_size);
+
+  // Test file mmap from download dir to see how it impacts the budget.
+  fd = sceKernelOpen("/download0/test_file.txt", 0, 0666);
+  CHECK(fd > 0);
+  result = sceKernelMmap(0, 0x100000, 3, 0, fd, 0, &new_addr);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // This should reduce available size by 0x10000.
+  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(avail_flex_size_before - 0x100000, avail_flex_size);
+
+  // Unmap the memory
+  result = sceKernelMunmap(new_addr, 0x100000);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // Close the file
+  result = sceKernelClose(fd);
+  UNSIGNED_INT_EQUALS(0, result);
+
+  // This should bring available back to normal.
+  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
+  UNSIGNED_INT_EQUALS(0, result);
+  LONGS_EQUAL(avail_flex_size_before, avail_flex_size);
+}
+
+// This test is high up to prevent sceKernelEnableDmemAliasing from altering DirectTest behavior
 TEST(MemoryTests, MapMemoryTest) {
   // These tests assume a 16KB page size, so check getpagesize to validate this.
   int32_t page_size = getpagesize();
@@ -1892,249 +2136,6 @@ TEST(MemoryTests, FileMappingTest) {
   // Unmap test memory
   result = sceKernelMunmap(output_addr, 0x8000);
   UNSIGNED_INT_EQUALS(0, result);
-}
-
-TEST(MemoryTests, FlexibleTest) {
-  // This test is to validate memory behaviors unique to flexible memory mappings.
-  // Start by testing available flexible memory size.
-  std::list<uint64_t> addresses;
-  uint64_t            addr_out = 0;
-  int32_t             result   = 0;
-  while (result == 0) {
-    result = sceKernelMapFlexibleMemory(&addr_out, 0x4000, 3, 0);
-    if (result < 0) {
-      // Out of flex mem
-      UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
-    } else {
-      // Mapped flex mem successfully.
-      UNSIGNED_INT_EQUALS(0, result);
-      // Add the mapping address to addresses, need to unmap later to clean up.
-      addresses.emplace_back(addr_out);
-    }
-  }
-
-  // After all these mappings, available flex size should be 0.
-  uint64_t avail_flex_size = 0;
-  result                   = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(0, avail_flex_size);
-
-  // sceKernelMmap with MAP_ANON uses the flexible budget.
-  uint64_t test_addr;
-  result = sceKernelMmap(0, 0x4000, 3, 0x1000, -1, 0, &test_addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
-
-  // Test budget behavior with MAP_STACK
-  test_addr = 0xfb00000000;
-  result    = sceKernelMmap(test_addr, 0x4000, 3, 0x400, -1, 0, &test_addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
-
-  // sceKernelMmap with MAP_VOID
-  result = sceKernelMmap(test_addr, 0x4000, 3, 0x100, -1, 0, &test_addr);
-  UNSIGNED_INT_EQUALS(0, result);
-  result = sceKernelMunmap(test_addr, 0x4000);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // sceKernelMmap with files also uses the flexible budget.
-  int32_t fd = sceKernelOpen("/app0/assets/misc/test_file.txt", 0, 0666);
-  CHECK(fd > 0);
-  result = sceKernelMmap(0, 0x4000, 3, 0, fd, 0, &test_addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
-  result = sceKernelClose(fd);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // Make sure download dir file has enough space to mmap before trying.
-  fd = sceKernelOpen("/download0/test_file.txt", 0x602, 0666);
-  CHECK(fd > 0);
-  char test_buf[0x100000];
-  memset(test_buf, 0, sizeof(test_buf));
-  int64_t bytes = sceKernelWrite(fd, test_buf, sizeof(test_buf));
-  LONGS_EQUAL(sizeof(test_buf), bytes);
-
-  // mmap download dir file.
-  result = sceKernelMmap(0, 0x4000, 3, 0, fd, 0, &test_addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EINVAL, result);
-  result = sceKernelClose(fd);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // Files in system folders like /data don't count towards the budget.
-  fd = sceKernelOpen("/data/test_file.txt", 0x602, 0666);
-  CHECK(fd > 0);
-  memset(test_buf, 0, sizeof(test_buf));
-  bytes = sceKernelWrite(fd, test_buf, sizeof(test_buf));
-  LONGS_EQUAL(sizeof(test_buf), bytes);
-
-  // mmap data dir file.
-  result = sceKernelMmap(0, 0x4000, 3, 0, fd, 0, &test_addr);
-  UNSIGNED_INT_EQUALS(0, result);
-  result = sceKernelMunmap(test_addr, 0x4000);
-  UNSIGNED_INT_EQUALS(0, result);
-  result = sceKernelClose(fd);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // We can't directly correlate flex size to mapped memory,
-  // since my list of addresses will also cut into the flex mem budget.
-
-  // Unmap all of the flexible memory used here.
-  for (uint64_t addr: addresses) {
-    result = sceKernelMunmap(addr, 0x4000);
-    UNSIGNED_INT_EQUALS(0, result);
-  }
-  addresses.clear();
-
-  // Available flex size should be greater than 0 now
-  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  CHECK(avail_flex_size != 0);
-
-  // Flexible memory is not backed in any way, so the contents are garbage before initializing.
-  addr_out = 0x300000000;
-  result   = sceKernelMapFlexibleMemory(&addr_out, 0x10000, 3, 0);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // While we're here, make sure stored memory info matches expectations for flexible memory.
-  struct OrbisKernelVirtualQueryInfo {
-    uint64_t start;
-    uint64_t end;
-    int64_t  offset;
-    int32_t  prot;
-    int32_t  memory_type;
-    uint8_t  is_flexible  : 1;
-    uint8_t  is_direct    : 1;
-    uint8_t  is_stack     : 1;
-    uint8_t  is_pooled    : 1;
-    uint8_t  is_committed : 1;
-    char     name[32];
-  };
-
-  OrbisKernelVirtualQueryInfo info;
-  info   = {};
-  result = sceKernelVirtualQuery(addr_out, 0, &info, sizeof(info));
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(addr_out, info.start);
-  LONGS_EQUAL(addr_out + 0x10000, info.end);
-  LONGS_EQUAL(0, info.offset);
-  LONGS_EQUAL(3, info.prot);
-  LONGS_EQUAL(0, info.memory_type);
-  LONGS_EQUAL(1, info.is_flexible);
-  LONGS_EQUAL(0, info.is_direct);
-  LONGS_EQUAL(0, info.is_stack);
-  LONGS_EQUAL(0, info.is_pooled);
-  LONGS_EQUAL(1, info.is_committed);
-
-  // Write 1's to the full memory range.
-  memset(reinterpret_cast<void*>(addr_out), 1, 0x10000);
-
-  // Ensure the full range has 1's
-  memset(test_buf, 1, sizeof(test_buf));
-  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x10000);
-  LONGS_EQUAL(0, result);
-
-  // Unmap the middle of the range
-  result = sceKernelMunmap(addr_out + 0x4000, 0x8000);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // Ensure the remaining mapped areas are still filled with 1's
-  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x4000);
-  LONGS_EQUAL(0, result);
-  result = memcmp(&test_buf[0xc000], reinterpret_cast<void*>(addr_out + 0xc000), 0x4000);
-  LONGS_EQUAL(0, result);
-
-  // Remap the unmapped area, use flag fixed to ensure correct placement.
-  uint64_t new_addr = addr_out + 0x4000;
-  result            = sceKernelMapFlexibleMemory(&new_addr, 0x8000, 3, 0x10);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(addr_out + 0x4000, new_addr);
-
-  // The new memory area will not have the contents of the old memory.
-  result = memcmp(&test_buf[0x4000], reinterpret_cast<void*>(new_addr), 0x8000);
-  CHECK(result != 0);
-
-  // Re-fill the area with 1's
-  memset(reinterpret_cast<void*>(addr_out), 1, 0x10000);
-  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x10000);
-  LONGS_EQUAL(0, result);
-
-  // Overwrite the whole memory area, this should destroy the contents within.
-  new_addr = addr_out;
-  result   = sceKernelMapFlexibleMemory(&new_addr, 0x10000, 3, 0x10);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(new_addr, addr_out);
-
-  result = memcmp(test_buf, reinterpret_cast<void*>(addr_out), 0x10000);
-  CHECK(result != 0);
-
-  result = sceKernelMunmap(new_addr, 0x10000);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // Get a base budget value to calculate with.
-  uint64_t avail_flex_size_before = 0;
-  result                          = sceKernelAvailableFlexibleMemorySize(&avail_flex_size_before);
-  UNSIGNED_INT_EQUALS(0, result);
-  CHECK(avail_flex_size_before != 0);
-
-  // Note: Seems like allocations are not directly consuming the budget.
-  // Using these larger sized mappings allows me to validate budget behavior, but I will need to test this issue.
-
-  // Test sceKernelMapFlexibleMemory to see how it impacts the budget.
-  result = sceKernelMapFlexibleMemory(&new_addr, 0x100000, 3, 0x0);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // This should reduce available size by 0x100000.
-  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(avail_flex_size_before - 0x100000, avail_flex_size);
-
-  // Unmap the memory
-  result = sceKernelMunmap(new_addr, 0x100000);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // This should bring available back to normal.
-  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(avail_flex_size_before, avail_flex_size);
-
-  // Test mmap with MAP_ANON to see how it impacts the budget.
-  result = sceKernelMmap(0, 0x100000, 3, 0x1000, -1, 0, &new_addr);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // This should reduce available size by 0x100000.
-  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(avail_flex_size_before - 0x100000, avail_flex_size);
-
-  // Unmap the memory
-  result = sceKernelMunmap(new_addr, 0x100000);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // This should bring available back to normal.
-  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(avail_flex_size_before, avail_flex_size);
-
-  // Test file mmap from download dir to see how it impacts the budget.
-  fd = sceKernelOpen("/download0/test_file.txt", 0, 0666);
-  CHECK(fd > 0);
-  result = sceKernelMmap(0, 0x100000, 3, 0, fd, 0, &new_addr);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // This should reduce available size by 0x10000.
-  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(avail_flex_size_before - 0x100000, avail_flex_size);
-
-  // Unmap the memory
-  result = sceKernelMunmap(new_addr, 0x100000);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // Close the file
-  result = sceKernelClose(fd);
-  UNSIGNED_INT_EQUALS(0, result);
-
-  // This should bring available back to normal.
-  result = sceKernelAvailableFlexibleMemorySize(&avail_flex_size);
-  UNSIGNED_INT_EQUALS(0, result);
-  LONGS_EQUAL(avail_flex_size_before, avail_flex_size);
 }
 
 TEST(MemoryTests, DirectTest) {
