@@ -55,9 +55,9 @@ struct OrbisSaveDataMount2 {
   int32_t user_id;
   int32_t : 32;
   const OrbisSaveDataDirName* dir_name;
-  uint64_t blocks;
-  uint32_t mount_mode;
-  char reserved_2[32];
+  uint64_t                    blocks;
+  uint32_t                    mount_mode;
+  char                        reserved_2[32];
   int32_t : 32;
 };
 
@@ -67,10 +67,10 @@ struct OrbisSaveDataMountPoint {
 
 struct OrbisSaveDataMountResult {
   OrbisSaveDataMountPoint mount_point;
-  uint64_t required_blocks;
-  uint32_t unused;
-  uint32_t mount_status;
-  char reserved[32];
+  uint64_t                required_blocks;
+  uint32_t                unused;
+  uint32_t                mount_status;
+  char                    reserved[32];
   int32_t : 32;
 };
 
