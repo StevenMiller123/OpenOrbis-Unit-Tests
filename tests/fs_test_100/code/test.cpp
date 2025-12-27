@@ -42,8 +42,8 @@ TEST(Test, Test) {
   CHECK_FALSE(fd < 0);
 
   // Run stat on PFS directory
-  OrbisKernelStat info{};
-  int32_t result = sceKernelFstat(fd, &info);
+  OrbisKernelStat info {};
+  int32_t         result = sceKernelFstat(fd, &info);
   UNSIGNED_INT_EQUALS(0, result);
 
   // Log info from stat call.
@@ -59,8 +59,8 @@ TEST(Test, Test) {
   CHECK_EQUAL(0x200, bytes);
 
   // The raw data of a directory, as returned by read, is a list of dirent objects describing each file.
-  int32_t num_entries = 0;
-  char* current_entry = dirent_buf;
+  int32_t num_entries   = 0;
+  char*   current_entry = dirent_buf;
   while (current_entry < dirent_buf + bytes) {
     PfsDirent* entry = (PfsDirent*)current_entry;
 
