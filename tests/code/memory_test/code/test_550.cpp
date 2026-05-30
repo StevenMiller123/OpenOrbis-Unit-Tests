@@ -370,7 +370,7 @@ TEST(MemoryTests, TestFileMappings) {
   result = sceKernelMmap(0, 0x4000, 3, MAP_NOFLAGS, fd, 0, &addr);
   UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
 
-  // Write-only mmap is impossible
+  // Write-only mmap is impossible, as write-only is treated as read-write.
   result = sceKernelMmap(0, 0x4000, 2, MAP_SHARED, fd, 0, &addr);
   UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
   result = sceKernelMmap(0, 0x4000, 2, MAP_PRIVATE, fd, 0, &addr);
@@ -445,6 +445,69 @@ TEST(MemoryTests, TestFileMappings) {
 
   // Write ones and close.
   write_file(fd, ones_buf);
+  unmap_file(addr);
+  close_file(fd);
+
+  // Open file as read-only.
+  fd = open_file(0);
+
+  // Read-write mmap is impossible with MAP_SHARED.
+  result = sceKernelMmap(0, 0x4000, 3, MAP_SHARED, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
+
+  // You can, however, perform a read-write mmap with MAP_PRIVATE or no flags.
+  addr = map_file(0, fd, MAP_PRIVATE, 3);
+  unmap_file(addr);
+  addr = map_file(0, fd, MAP_NOFLAGS, 3);
+  unmap_file(addr);
+
+  // Same applies to write-only, as write-only is treated as read-write.
+  result = sceKernelMmap(0, 0x4000, 2, MAP_SHARED, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
+  addr = map_file(0, fd, MAP_PRIVATE, 3);
+  unmap_file(addr);
+  addr = map_file(0, fd, MAP_NOFLAGS, 3);
+  unmap_file(addr);
+
+  // Read-only mmap is possible with all flag combinations
+  addr = map_file(0, fd, MAP_SHARED, 1);
+  unmap_file(addr);
+  addr = map_file(0, fd, MAP_PRIVATE, 1);
+  unmap_file(addr);
+  addr = map_file(0, fd, MAP_NOFLAGS, 1);
+  unmap_file(addr);
+
+  // We can take advantage of mprotect again
+  addr = map_file(0, fd, MAP_SHARED, 1);
+  protect_memory(addr, 3);
+
+  // Now we have read-write access to a read-only file.
+  check_memory(addr, ones_buf);
+
+  // Write to our memory, this will update the file contents.
+  write_memory(addr, twos_buf);
+  check_file(fd, twos_buf);
+  write_memory(addr, ones_buf);
+
+  // Unmap and close file.
+  unmap_file(addr);
+  close_file(fd);
+
+  // Open file as read-only.
+  fd = open_file(0);
+
+  // Make sure MAP_PRIVATE behaves as expected.
+  addr = map_file(0, fd, MAP_PRIVATE, 1);
+  protect_memory(addr, 3);
+
+  // Now we have read-write access to a read-only file.
+  check_memory(addr, ones_buf);
+
+  // Write to our memory, this will not update the file contents.
+  write_memory(addr, twos_buf);
+  check_file(fd, ones_buf);
+
+  // Unmap and close file.
   unmap_file(addr);
   close_file(fd);
 }
