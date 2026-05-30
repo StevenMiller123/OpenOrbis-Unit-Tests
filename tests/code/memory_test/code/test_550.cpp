@@ -401,10 +401,52 @@ TEST(MemoryTests, TestFileMappings) {
   write_file(fd, twos_buf);
   check_memory(addr, twos_buf);
 
-  // Bring back ones before unmapping
-  write_file(fd, ones_buf);
+  // While we can't see it through file reads, we can still write through memory too
+  write_memory(addr, ones_buf);
   
-  // Unmap and close file
+  // Unmap memory
+  unmap_file(addr);
+
+  // Remap file
+  addr = map_file(0, fd, MAP_SHARED, 0);
+  protect_memory(addr, 3);
+
+  // The memory should contain the ones written earlier.
+  check_memory(addr, ones_buf);
+
+  // Unmap memory
+  unmap_file(addr);
+  close_file(fd);
+
+  // Re-open and setup the same mapping, this time as private.
+  fd = open_file(1);
+  addr = map_file(0, fd, MAP_PRIVATE, 0);
+  protect_memory(addr, 3);
+
+  // Now memory should contain ones if it is properly backed
+  check_memory(addr, ones_buf);
+
+  // Under these circumstances, this private mapping behaves as a copy-on-write mapping.
+  // The contents of the memory update appropriately.
+  write_file(fd, twos_buf);
+  check_memory(addr, twos_buf);
+
+  // Writes to memory trigger a copy
+  write_memory(addr, ones_buf);
+  check_memory(addr, ones_buf);
+
+  // Verify that the memory is no longer identical
+  write_file(fd, zeros_buf);
+  check_memory(addr, ones_buf);
+  
+  // Remap to confirm write occurred properly.
+  unmap_file(addr);
+  addr = map_file(0, fd, MAP_PRIVATE, 0);
+  protect_memory(addr, 3);
+  check_memory(addr, zeros_buf);
+
+  // Write ones and close.
+  write_file(fd, ones_buf);
   unmap_file(addr);
   close_file(fd);
 }
