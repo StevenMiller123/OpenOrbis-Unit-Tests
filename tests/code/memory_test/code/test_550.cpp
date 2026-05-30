@@ -200,7 +200,7 @@ TEST(MemoryTests, TestFileMappings) {
   char twos_buf[0x4000];
   memset(twos_buf, 2, sizeof(twos_buf));
   int32_t MAP_NOFLAGS = 0;
-  int32_t MAP_SHARED = 1;
+  int32_t MAP_SHARED  = 1;
   int32_t MAP_PRIVATE = 2;
 
   auto open_file = [](int32_t flags) {
@@ -250,9 +250,7 @@ TEST(MemoryTests, TestFileMappings) {
     UNSIGNED_INT_EQUALS(0, result);
   };
 
-  auto write_memory = [](uint64_t addr, void* data) {
-    memcpy((void*)addr, data, 0x4000);
-  };
+  auto write_memory = [](uint64_t addr, void* data) { memcpy((void*)addr, data, 0x4000); };
 
   auto protect_memory = [](uint64_t addr, int32_t prot) {
     int32_t result = sceKernelMprotect(addr, 0x4000, prot);
@@ -261,7 +259,7 @@ TEST(MemoryTests, TestFileMappings) {
 
   auto check_file = [](int32_t fd, void* data) {
     // Read data to addr
-    char addr[0x4000];
+    char    addr[0x4000];
     int64_t result = sceKernelRead(fd, addr, 0x4000);
     UNSIGNED_INT_EQUALS(0x4000, result);
 
@@ -289,7 +287,7 @@ TEST(MemoryTests, TestFileMappings) {
 
   // A couple combinations of file perms and mmap prots need testing here.
   // First, we want the basic case. Open file as read-write, mmap as read-write with MAP_SHARED specified.
-  fd = open_file(2);
+  fd            = open_file(2);
   uint64_t addr = map_file(0, fd, MAP_SHARED, 3);
 
   // What we should have here is a shared mapping.
@@ -320,7 +318,7 @@ TEST(MemoryTests, TestFileMappings) {
   unmap_file(addr);
   close_file(fd);
 
-  fd = open_file(2);
+  fd   = open_file(2);
   addr = map_file(0, fd, MAP_PRIVATE, 3);
 
   // What we should have here is a private mapping, where file contents and memory contents aren't synchronized
@@ -403,7 +401,7 @@ TEST(MemoryTests, TestFileMappings) {
 
   // While we can't see it through file reads, we can still write through memory too
   write_memory(addr, ones_buf);
-  
+
   // Unmap memory
   unmap_file(addr);
 
@@ -419,7 +417,7 @@ TEST(MemoryTests, TestFileMappings) {
   close_file(fd);
 
   // Re-open and setup the same mapping, this time as private.
-  fd = open_file(1);
+  fd   = open_file(1);
   addr = map_file(0, fd, MAP_PRIVATE, 0);
   protect_memory(addr, 3);
 
@@ -438,7 +436,7 @@ TEST(MemoryTests, TestFileMappings) {
   // Verify that the memory is no longer identical
   write_file(fd, zeros_buf);
   check_memory(addr, ones_buf);
-  
+
   // Remap to confirm write occurred properly.
   unmap_file(addr);
   addr = map_file(0, fd, MAP_PRIVATE, 0);
