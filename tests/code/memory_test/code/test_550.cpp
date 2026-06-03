@@ -192,6 +192,53 @@ TEST(MemoryTests, TLOU2Test) {
   UNSIGNED_INT_EQUALS(0, result);
 }
 
+#define open_file(flags)                                                                                                                                       \
+  fd = sceKernelOpen("/data/file_map_test.txt", flags, 0777);                                                                                                  \
+  CHECK(fd > 0);
+
+#define close_file(fd)                                                                                                                                         \
+  result = sceKernelClose(fd);                                                                                                                                 \
+  UNSIGNED_INT_EQUALS(0, result);
+
+#define map_file(in_addr, fd, flags, prot)                                                                                                                     \
+  addr   = in_addr;                                                                                                                                            \
+  result = sceKernelMmap(addr, 0x4000, prot, flags, fd, 0, &addr);                                                                                             \
+  UNSIGNED_INT_EQUALS(0, result);
+
+#define trunc_file(fd, size)                                                                                                                                   \
+  result = sceKernelFtruncate(fd, size);                                                                                                                       \
+  UNSIGNED_INT_EQUALS(0, result);                                                                                                                              \
+  result = sceKernelLseek(fd, 0, 0);                                                                                                                           \
+  UNSIGNED_INT_EQUALS(0, result);
+
+#define check_memory(addr, data)                                                                                                                               \
+  result = memcmp((void*)addr, data, 0x4000);                                                                                                                  \
+  UNSIGNED_INT_EQUALS(0, result);
+
+#define write_memory(addr, data) memcpy((void*)addr, data, 0x4000);
+
+#define protect_memory(addr, prot)                                                                                                                             \
+  result = sceKernelMprotect(addr, 0x4000, prot);                                                                                                              \
+  UNSIGNED_INT_EQUALS(0, result);
+
+#define check_file(fd, data)                                                                                                                                   \
+  result = sceKernelRead(fd, test_buf, 0x4000);                                                                                                                \
+  UNSIGNED_INT_EQUALS(0x4000, result);                                                                                                                         \
+  result = sceKernelLseek(fd, 0, 0);                                                                                                                           \
+  UNSIGNED_INT_EQUALS(0, result);                                                                                                                              \
+  result = memcmp(test_buf, data, 0x4000);                                                                                                                     \
+  UNSIGNED_INT_EQUALS(0, result);
+
+#define unmap_file(addr)                                                                                                                                       \
+  result = sceKernelMunmap(addr, 0x4000);                                                                                                                      \
+  UNSIGNED_INT_EQUALS(0, result);
+
+#define write_file(fd, addr)                                                                                                                                   \
+  result = sceKernelWrite(fd, addr, 0x4000);                                                                                                                   \
+  UNSIGNED_INT_EQUALS(0x4000, result);                                                                                                                         \
+  result = sceKernelLseek(fd, 0, 0);                                                                                                                           \
+  UNSIGNED_INT_EQUALS(0, result);
+
 TEST(MemoryTests, TestFileMappings) {
   char zeros_buf[0x4000];
   memset(zeros_buf, 0, sizeof(zeros_buf));
@@ -199,81 +246,18 @@ TEST(MemoryTests, TestFileMappings) {
   memset(ones_buf, 1, sizeof(ones_buf));
   char twos_buf[0x4000];
   memset(twos_buf, 2, sizeof(twos_buf));
-  int32_t MAP_NOFLAGS = 0;
-  int32_t MAP_SHARED  = 1;
-  int32_t MAP_PRIVATE = 2;
-
-  auto open_file = [](int32_t flags) {
-    int32_t fd = sceKernelOpen("/data/file_map_test.txt", flags, 0777);
-    CHECK(fd > 0);
-    return fd;
-  };
-
-  auto close_file = [](int32_t fd) {
-    int32_t result = sceKernelClose(fd);
-    UNSIGNED_INT_EQUALS(0, result);
-  };
-
-  auto map_file = [](uint64_t addr, int32_t fd, int32_t flags, int32_t prot) {
-    // Map the file to memory
-    uint64_t out_addr = addr;
-    int32_t  result   = sceKernelMmap(out_addr, 0x4000, prot, flags, fd, 0, &out_addr);
-    UNSIGNED_INT_EQUALS(0, result);
-    return out_addr;
-  };
-
-  auto unmap_file = [](uint64_t addr) {
-    int32_t result = sceKernelMunmap(addr, 0x4000);
-    UNSIGNED_INT_EQUALS(0, result);
-  };
-
-  auto write_file = [](int32_t fd, void* addr) {
-    // Write contents from addr to file
-    int64_t result = sceKernelWrite(fd, addr, 0x4000);
-    UNSIGNED_INT_EQUALS(0x4000, result);
-    // Reset file pointer
-    result = sceKernelLseek(fd, 0, 0);
-    UNSIGNED_INT_EQUALS(0, result);
-  };
-
-  auto trunc_file = [](int32_t fd, uint64_t size) {
-    // Truncate file to requested size
-    int64_t result = sceKernelFtruncate(fd, size);
-    UNSIGNED_INT_EQUALS(0, result);
-    // Reset file pointer
-    result = sceKernelLseek(fd, 0, 0);
-    UNSIGNED_INT_EQUALS(0, result);
-  };
-
-  auto check_memory = [](uint64_t addr, void* data) {
-    int32_t result = memcmp((void*)addr, data, 0x4000);
-    UNSIGNED_INT_EQUALS(0, result);
-  };
-
-  auto write_memory = [](uint64_t addr, void* data) { memcpy((void*)addr, data, 0x4000); };
-
-  auto protect_memory = [](uint64_t addr, int32_t prot) {
-    int32_t result = sceKernelMprotect(addr, 0x4000, prot);
-    UNSIGNED_INT_EQUALS(0, result);
-  };
-
-  auto check_file = [](int32_t fd, void* data) {
-    // Read data to addr
-    char    addr[0x4000];
-    int64_t result = sceKernelRead(fd, addr, 0x4000);
-    UNSIGNED_INT_EQUALS(0x4000, result);
-
-    // Reset file pointer
-    result = sceKernelLseek(fd, 0, 0);
-    UNSIGNED_INT_EQUALS(0, result);
-
-    // Check memory contents
-    result = memcmp(addr, data, 0x4000);
-    UNSIGNED_INT_EQUALS(0, result);
-  };
+  char test_buf[0x4000];
+  memset(test_buf, 0, sizeof(test_buf));
+  int32_t  MAP_NOFLAGS = 0;
+  int32_t  MAP_SHARED  = 1;
+  int32_t  MAP_PRIVATE = 2;
+  int32_t  fd;
+  int64_t  result;
+  uint64_t addr     = 0;
+  uint64_t out_addr = 0;
 
   // Open and prepare file
-  int32_t fd = open_file(0x602);
+  open_file(0x602);
   trunc_file(fd, 0x4000);
 
   // File data starts zeroed after ftruncate
@@ -287,8 +271,8 @@ TEST(MemoryTests, TestFileMappings) {
 
   // A couple combinations of file perms and mmap prots need testing here.
   // First, we want the basic case. Open file as read-write, mmap as read-write with MAP_SHARED specified.
-  fd            = open_file(2);
-  uint64_t addr = map_file(0, fd, MAP_SHARED, 3);
+  open_file(2);
+  map_file(0, fd, MAP_SHARED, 3);
 
   // What we should have here is a shared mapping.
   // All writes to the memory will be visible in the file, and all writes to the file will appear in memory.
@@ -318,8 +302,8 @@ TEST(MemoryTests, TestFileMappings) {
   unmap_file(addr);
   close_file(fd);
 
-  fd   = open_file(2);
-  addr = map_file(0, fd, MAP_PRIVATE, 3);
+  fd = open_file(2);
+  map_file(0, fd, MAP_PRIVATE, 3);
 
   // What we should have here is a private mapping, where file contents and memory contents aren't synchronized
   // As-is, both memory and file should be full of ones.
@@ -338,7 +322,7 @@ TEST(MemoryTests, TestFileMappings) {
   // Unmap file
   unmap_file(addr);
 
-  addr = map_file(0, fd, MAP_PRIVATE, 3);
+  map_file(0, fd, MAP_PRIVATE, 3);
 
   // Now memory should contain twos
   check_memory(addr, twos_buf);
@@ -363,31 +347,31 @@ TEST(MemoryTests, TestFileMappings) {
   fd = open_file(1);
 
   // Read-write mmap is impossible.
-  int32_t result = sceKernelMmap(0, 0x4000, 3, MAP_SHARED, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
-  result = sceKernelMmap(0, 0x4000, 3, MAP_PRIVATE, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
-  result = sceKernelMmap(0, 0x4000, 3, MAP_NOFLAGS, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
+  int32_t check_result = sceKernelMmap(0, 0x4000, 3, MAP_SHARED, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
+  check_result = sceKernelMmap(0, 0x4000, 3, MAP_PRIVATE, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
+  check_result = sceKernelMmap(0, 0x4000, 3, MAP_NOFLAGS, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
 
   // Write-only mmap is impossible, as write-only is treated as read-write.
-  result = sceKernelMmap(0, 0x4000, 2, MAP_SHARED, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
-  result = sceKernelMmap(0, 0x4000, 2, MAP_PRIVATE, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
-  result = sceKernelMmap(0, 0x4000, 2, MAP_NOFLAGS, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
+  check_result = sceKernelMmap(0, 0x4000, 2, MAP_SHARED, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
+  check_result = sceKernelMmap(0, 0x4000, 2, MAP_PRIVATE, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
+  check_result = sceKernelMmap(0, 0x4000, 2, MAP_NOFLAGS, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
 
   // Read-only mmap is impossible
-  result = sceKernelMmap(0, 0x4000, 1, MAP_SHARED, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
-  result = sceKernelMmap(0, 0x4000, 1, MAP_PRIVATE, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
-  result = sceKernelMmap(0, 0x4000, 1, MAP_NOFLAGS, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
+  check_result = sceKernelMmap(0, 0x4000, 1, MAP_SHARED, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
+  check_result = sceKernelMmap(0, 0x4000, 1, MAP_PRIVATE, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
+  check_result = sceKernelMmap(0, 0x4000, 1, MAP_NOFLAGS, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
 
   // No-access mmap is possible.
-  addr = map_file(0, fd, MAP_SHARED, 0);
+  map_file(0, fd, MAP_SHARED, 0);
 
   // We can protect this to get access to data
   protect_memory(addr, 3);
@@ -406,7 +390,7 @@ TEST(MemoryTests, TestFileMappings) {
   unmap_file(addr);
 
   // Remap file
-  addr = map_file(0, fd, MAP_SHARED, 0);
+  map_file(0, fd, MAP_SHARED, 0);
   protect_memory(addr, 3);
 
   // The memory should contain the ones written earlier.
@@ -417,8 +401,8 @@ TEST(MemoryTests, TestFileMappings) {
   close_file(fd);
 
   // Re-open and setup the same mapping, this time as private.
-  fd   = open_file(1);
-  addr = map_file(0, fd, MAP_PRIVATE, 0);
+  open_file(1);
+  map_file(0, fd, MAP_PRIVATE, 0);
   protect_memory(addr, 3);
 
   // Now memory should contain ones if it is properly backed
@@ -439,7 +423,7 @@ TEST(MemoryTests, TestFileMappings) {
 
   // Remap to confirm write occurred properly.
   unmap_file(addr);
-  addr = map_file(0, fd, MAP_PRIVATE, 0);
+  map_file(0, fd, MAP_PRIVATE, 0);
   protect_memory(addr, 3);
   check_memory(addr, zeros_buf);
 
@@ -449,36 +433,36 @@ TEST(MemoryTests, TestFileMappings) {
   close_file(fd);
 
   // Open file as read-only.
-  fd = open_file(0);
+  open_file(0);
 
   // Read-write mmap is impossible with MAP_SHARED.
-  result = sceKernelMmap(0, 0x4000, 3, MAP_SHARED, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
+  check_result = sceKernelMmap(0, 0x4000, 3, MAP_SHARED, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
 
   // You can, however, perform a read-write mmap with MAP_PRIVATE or no flags.
-  addr = map_file(0, fd, MAP_PRIVATE, 3);
+  map_file(0, fd, MAP_PRIVATE, 3);
   unmap_file(addr);
-  addr = map_file(0, fd, MAP_NOFLAGS, 3);
+  map_file(0, fd, MAP_NOFLAGS, 3);
   unmap_file(addr);
 
   // Same applies to write-only, as write-only is treated as read-write.
-  result = sceKernelMmap(0, 0x4000, 2, MAP_SHARED, fd, 0, &addr);
-  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, result);
-  addr = map_file(0, fd, MAP_PRIVATE, 3);
+  check_result = sceKernelMmap(0, 0x4000, 2, MAP_SHARED, fd, 0, &addr);
+  UNSIGNED_INT_EQUALS(ORBIS_KERNEL_ERROR_EACCES, check_result);
+  map_file(0, fd, MAP_PRIVATE, 3);
   unmap_file(addr);
-  addr = map_file(0, fd, MAP_NOFLAGS, 3);
+  map_file(0, fd, MAP_NOFLAGS, 3);
   unmap_file(addr);
 
   // Read-only mmap is possible with all flag combinations
-  addr = map_file(0, fd, MAP_SHARED, 1);
+  map_file(0, fd, MAP_SHARED, 1);
   unmap_file(addr);
-  addr = map_file(0, fd, MAP_PRIVATE, 1);
+  map_file(0, fd, MAP_PRIVATE, 1);
   unmap_file(addr);
-  addr = map_file(0, fd, MAP_NOFLAGS, 1);
+  map_file(0, fd, MAP_NOFLAGS, 1);
   unmap_file(addr);
 
   // We can take advantage of mprotect again
-  addr = map_file(0, fd, MAP_SHARED, 1);
+  map_file(0, fd, MAP_SHARED, 1);
   protect_memory(addr, 3);
 
   // Now we have read-write access to a read-only file.
@@ -494,10 +478,10 @@ TEST(MemoryTests, TestFileMappings) {
   close_file(fd);
 
   // Open file as read-only.
-  fd = open_file(0);
+  open_file(0);
 
   // Make sure MAP_PRIVATE behaves as expected.
-  addr = map_file(0, fd, MAP_PRIVATE, 1);
+  map_file(0, fd, MAP_PRIVATE, 1);
   protect_memory(addr, 3);
 
   // Now we have read-write access to a read-only file.
@@ -511,3 +495,13 @@ TEST(MemoryTests, TestFileMappings) {
   unmap_file(addr);
   close_file(fd);
 }
+
+#undef open_file
+#undef close_file
+#undef map_file
+#undef trunc_file
+#undef check_memory
+#undef protect_memory
+#undef check_file
+#undef unmap_file
+#undef write_file
